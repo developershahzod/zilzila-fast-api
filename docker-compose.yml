@@ -1,0 +1,32 @@
+
+services:
+  api:
+    build: .
+    ports:
+      - "8005:8005"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/smrm_db
+      - API_URL=https://api.smrm.uz/api/earthquakes
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=smrm_db
+    depends_on:
+      - db
+    volumes:
+      - ./:/app
+    restart: always
+
+  db:
+    image: postgres:14
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=smrm_db
+    ports:
+      - "7432:5432"
+    restart: always
+
+volumes:
+  postgres_data:
