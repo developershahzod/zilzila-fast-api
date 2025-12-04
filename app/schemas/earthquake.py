@@ -11,7 +11,7 @@ class EarthquakeBase(BaseModel):
     magnitude: float
     color: str
     epicenter: str
-    description: str
+    description: Optional[str] = None
     is_influence: Optional[bool] = None
     seisprog_id: Optional[int] = None
     is_perceptabily: bool = False

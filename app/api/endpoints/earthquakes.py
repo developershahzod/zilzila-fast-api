@@ -12,7 +12,7 @@ router = APIRouter()
 async def read_earthquakes(
     db: Session = Depends(get_db),
     skip: int = Query(0, alias="page", ge=0),
-    limit: int = Query(10, alias="per_page", ge=1, le=100),
+    limit: int = Query(10, alias="per_page", ge=1, le=10000),
     epicenter: Optional[str] = Query(None),
     from_date: Optional[str] = Query(None),
     to_date: Optional[str] = Query(None),

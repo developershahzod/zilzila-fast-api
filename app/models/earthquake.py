@@ -14,7 +14,7 @@ class Earthquake(Base):
     magnitude = Column(Float)
     color = Column(String)
     epicenter = Column(String)
-    description = Column(Text)
+    description = Column(Text, nullable=True)
     is_influence = Column(Boolean, nullable=True)
     seisprog_id = Column(Integer, nullable=True)
     is_perceptabily = Column(Boolean, default=False)
