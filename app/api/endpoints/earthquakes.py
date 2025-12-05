@@ -16,8 +16,8 @@ async def read_earthquakes(
     epicenter: Optional[str] = Query(None),
     from_date: Optional[str] = Query(None),
     to_date: Optional[str] = Query(None),
-    from_magnitude: Optional[float] = Query(None),
-    to_magnitude: Optional[float] = Query(None),
+    from_magnitude: Optional[str] = Query(None),
+    to_magnitude: Optional[str] = Query(None),
     from_depth: Optional[str] = Query(None),
     to_depth: Optional[str] = Query(None),
     from_latitude: Optional[str] = Query(None),
@@ -26,6 +26,22 @@ async def read_earthquakes(
     to_longitude: Optional[str] = Query(None),
     sort: str = Query("datetime_desc")
 ):
+    # Convert empty/whitespace strings to None and parse magnitude values
+    from_mag = None
+    to_mag = None
+    
+    if from_magnitude and from_magnitude.strip():
+        try:
+            from_mag = float(from_magnitude)
+        except ValueError:
+            pass
+    
+    if to_magnitude and to_magnitude.strip():
+        try:
+            to_mag = float(to_magnitude)
+        except ValueError:
+            pass
+    
     earthquakes, total = EarthquakeService.get_earthquakes(
         db, 
         skip=skip * limit, 
@@ -33,14 +49,15 @@ async def read_earthquakes(
         epicenter=epicenter,
         from_date=from_date,
         to_date=to_date,
-        from_magnitude=from_magnitude,
-        to_magnitude=to_magnitude,
+        from_magnitude=from_mag,
+        to_magnitude=to_mag,
         from_depth=from_depth,
         to_depth=to_depth,
         from_latitude=from_latitude,
         to_latitude=to_latitude,
         from_longitude=from_longitude,
-        to_longitude=to_longitude
+        to_longitude=to_longitude,
+        sort=sort
     )
     
     last_page = (total + limit - 1) // limit if limit > 0 else 0

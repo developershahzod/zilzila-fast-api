@@ -1,4 +1,5 @@
 from sqlalchemy.orm import Session
+from sqlalchemy import func, case
 from app.models.earthquake import Earthquake
 from app.schemas.earthquake import EarthquakeCreate, EarthquakeUpdate
 from datetime import datetime
@@ -20,7 +21,8 @@ class EarthquakeService:
         from_latitude: Optional[str] = None,
         to_latitude: Optional[str] = None,
         from_longitude: Optional[str] = None,
-        to_longitude: Optional[str] = None
+        to_longitude: Optional[str] = None,
+        sort: str = "datetime_desc"
     ):
         query = db.query(Earthquake)
         
@@ -58,7 +60,24 @@ class EarthquakeService:
             query = query.filter(Earthquake.longitude <= to_longitude)
         
         total = query.count()
-        earthquakes = query.order_by(Earthquake.created_at.desc()).offset(skip).limit(limit).all()
+        
+        # Convert date from DD.MM.YYYY to YYYY-MM-DD format for proper sorting
+        # Using PostgreSQL string functions: substring and concatenation
+        date_converted = func.concat(
+            func.substring(Earthquake.date, 7, 4),  # Year (YYYY)
+            '.',
+            func.substring(Earthquake.date, 4, 2),  # Month (MM)
+            '.',
+            func.substring(Earthquake.date, 1, 2)   # Day (DD)
+        )
+        
+        # Apply sorting based on sort parameter
+        if sort == "datetime_asc":
+            query = query.order_by(date_converted.asc(), Earthquake.time.asc())
+        else:  # datetime_desc (default)
+            query = query.order_by(date_converted.desc(), Earthquake.time.desc())
+        
+        earthquakes = query.offset(skip).limit(limit).all()
         
         return earthquakes, total
 
