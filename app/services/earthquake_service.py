@@ -5,6 +5,7 @@ from app.schemas.earthquake import EarthquakeCreate, EarthquakeUpdate
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 
+
 class EarthquakeService:
     @staticmethod
     def get_earthquakes(
