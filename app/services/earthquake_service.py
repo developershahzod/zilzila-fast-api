@@ -29,11 +29,28 @@ class EarthquakeService:
         if epicenter:
             query = query.filter(Earthquake.epicenter.ilike(f"%{epicenter}%"))
         
+        # Convert date from DD.MM.YYYY to YYYY.MM.DD format for proper comparison
+        date_converted_for_filter = func.concat(
+            func.substring(Earthquake.date, 7, 4),  # Year (YYYY)
+            '.',
+            func.substring(Earthquake.date, 4, 2),  # Month (MM)
+            '.',
+            func.substring(Earthquake.date, 1, 2)   # Day (DD)
+        )
+        
         if from_date:
-            query = query.filter(Earthquake.date >= from_date)
+            # Convert from_date from DD.MM.YYYY to YYYY.MM.DD
+            from_date_parts = from_date.split('.')
+            if len(from_date_parts) == 3:
+                from_date_converted = f"{from_date_parts[2]}.{from_date_parts[1]}.{from_date_parts[0]}"
+                query = query.filter(date_converted_for_filter >= from_date_converted)
         
         if to_date:
-            query = query.filter(Earthquake.date <= to_date)
+            # Convert to_date from DD.MM.YYYY to YYYY.MM.DD
+            to_date_parts = to_date.split('.')
+            if len(to_date_parts) == 3:
+                to_date_converted = f"{to_date_parts[2]}.{to_date_parts[1]}.{to_date_parts[0]}"
+                query = query.filter(date_converted_for_filter <= to_date_converted)
         
         if from_magnitude is not None:
             query = query.filter(Earthquake.magnitude >= from_magnitude)
