@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import func, case
+from sqlalchemy import func, case, Integer
 from app.models.earthquake import Earthquake
 from app.schemas.earthquake import EarthquakeCreate, EarthquakeUpdate
 from datetime import datetime
@@ -23,6 +23,8 @@ class EarthquakeService:
         to_latitude: Optional[str] = None,
         from_longitude: Optional[str] = None,
         to_longitude: Optional[str] = None,
+        from_year: Optional[int] = None,
+        to_year: Optional[int] = None,
         sort: str = "datetime_desc"
     ):
         query = db.query(Earthquake)
@@ -59,23 +61,32 @@ class EarthquakeService:
         if to_magnitude is not None:
             query = query.filter(Earthquake.magnitude <= to_magnitude)
         
-        if from_depth:
+        if from_depth is not None:
             query = query.filter(Earthquake.depth >= from_depth)
         
-        if to_depth:
+        if to_depth is not None:
             query = query.filter(Earthquake.depth <= to_depth)
         
-        if from_latitude:
+        if from_latitude is not None:
             query = query.filter(Earthquake.latitude >= from_latitude)
         
-        if to_latitude:
+        if to_latitude is not None:
             query = query.filter(Earthquake.latitude <= to_latitude)
         
-        if from_longitude:
+        if from_longitude is not None:
             query = query.filter(Earthquake.longitude >= from_longitude)
         
-        if to_longitude:
+        if to_longitude is not None:
             query = query.filter(Earthquake.longitude <= to_longitude)
+        
+        # Year filter - extract year from date field (DD.MM.YYYY format)
+        if from_year is not None:
+            year_from_date = func.substring(Earthquake.date, 7, 4)
+            query = query.filter(func.cast(year_from_date, Integer) >= from_year)
+        
+        if to_year is not None:
+            year_from_date = func.substring(Earthquake.date, 7, 4)
+            query = query.filter(func.cast(year_from_date, Integer) <= to_year)
         
         total = query.count()
         
@@ -183,3 +194,119 @@ class EarthquakeService:
             db.commit()
         
         return earthquakes, skipped
+
+    @staticmethod
+    def get_earthquakes_by_year(db: Session):
+        """
+        Get earthquake count grouped by year
+        Returns list of {year: str, count: int} ordered by year desc
+        """
+        # Extract year from date field (DD.MM.YYYY format, year is at position 7-10)
+        year_expr = func.substring(Earthquake.date, 7, 4)
+        
+        results = db.query(
+            year_expr.label('year'),
+            func.count(Earthquake.id).label('count')
+        ).group_by(year_expr).order_by(year_expr.desc()).all()
+        
+        return [{"year": row.year, "count": row.count} for row in results]
+
+    @staticmethod
+    def get_earthquakes_by_month(db: Session, year: Optional[int] = None):
+        """
+        Get earthquake count grouped by month
+        If year is provided, filter by that year
+        Returns list of {year: str, month: str, count: int} ordered by year desc, month desc
+        """
+        # Extract year and month from date field (DD.MM.YYYY format)
+        year_expr = func.substring(Earthquake.date, 7, 4)
+        month_expr = func.substring(Earthquake.date, 4, 2)
+        
+        query = db.query(
+            year_expr.label('year'),
+            month_expr.label('month'),
+            func.count(Earthquake.id).label('count')
+        )
+        
+        # Filter by year if provided
+        if year is not None:
+            query = query.filter(func.cast(year_expr, Integer) == year)
+        
+        results = query.group_by(year_expr, month_expr).order_by(
+            year_expr.desc(), 
+            month_expr.desc()
+        ).all()
+        
+        return [{"year": row.year, "month": row.month, "count": row.count} for row in results]
+
+    @staticmethod
+    def get_magnitude_statistics_by_month(db: Session, from_year: Optional[int] = None, to_year: Optional[int] = None):
+        """
+        Get highest magnitude grouped by year and month for chart visualization
+        Returns data suitable for multi-line chart with years as separate lines
+        Format: [{"year": "2023", "month": "01", "max_magnitude": 4.5, "count": 10}, ...]
+        """
+        # Extract year and month from date field (DD.MM.YYYY format)
+        year_expr = func.substring(Earthquake.date, 7, 4)
+        month_expr = func.substring(Earthquake.date, 4, 2)
+        
+        query = db.query(
+            year_expr.label('year'),
+            month_expr.label('month'),
+            func.max(Earthquake.magnitude).label('max_magnitude'),
+            func.count(Earthquake.id).label('count')
+        )
+        
+        # Filter by year range if provided
+        if from_year is not None:
+            query = query.filter(func.cast(year_expr, Integer) >= from_year)
+        
+        if to_year is not None:
+            query = query.filter(func.cast(year_expr, Integer) <= to_year)
+        
+        results = query.group_by(year_expr, month_expr).order_by(
+            year_expr.asc(), 
+            month_expr.asc()
+        ).all()
+        
+        return [{
+            "year": row.year, 
+            "month": row.month, 
+            "max_magnitude": round(float(row.max_magnitude), 2) if row.max_magnitude else 0,
+            "count": row.count
+        } for row in results]
+
+    @staticmethod
+    def get_count_statistics_by_month(db: Session, from_year: Optional[int] = None, to_year: Optional[int] = None):
+        """
+        Get earthquake count grouped by year and month for chart visualization
+        Returns data suitable for multi-line chart with years as separate lines
+        Format: [{"year": "2023", "month": "01", "count": 25}, ...]
+        """
+        # Extract year and month from date field (DD.MM.YYYY format)
+        year_expr = func.substring(Earthquake.date, 7, 4)
+        month_expr = func.substring(Earthquake.date, 4, 2)
+        
+        query = db.query(
+            year_expr.label('year'),
+            month_expr.label('month'),
+            func.count(Earthquake.id).label('count')
+        )
+        
+        # Filter by year range if provided
+        if from_year is not None:
+            query = query.filter(func.cast(year_expr, Integer) >= from_year)
+        
+        if to_year is not None:
+            query = query.filter(func.cast(year_expr, Integer) <= to_year)
+        
+        results = query.group_by(year_expr, month_expr).order_by(
+            year_expr.asc(), 
+            month_expr.asc()
+        ).all()
+        
+        return [{
+            "year": row.year, 
+            "month": row.month, 
+            "count": row.count
+        } for row in results]

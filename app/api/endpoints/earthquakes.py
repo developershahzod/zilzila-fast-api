@@ -24,6 +24,8 @@ async def read_earthquakes(
     to_latitude: Optional[str] = Query(None),
     from_longitude: Optional[str] = Query(None),
     to_longitude: Optional[str] = Query(None),
+    from_year: Optional[int] = Query(None),
+    to_year: Optional[int] = Query(None),
     sort: str = Query("datetime_desc")
 ):
     # Convert empty/whitespace strings to None and parse magnitude values
@@ -57,6 +59,8 @@ async def read_earthquakes(
         to_latitude=to_latitude,
         from_longitude=from_longitude,
         to_longitude=to_longitude,
+        from_year=from_year,
+        to_year=to_year,
         sort=sort
     )
     
@@ -94,6 +98,69 @@ def delete_earthquake(earthquake_id: int, db: Session = Depends(get_db)):
     if not success:
         raise HTTPException(status_code=404, detail="Earthquake not found")
     return {"detail": "Earthquake deleted successfully"}
+
+@router.get("/statistics/by-year")
+def get_statistics_by_year(db: Session = Depends(get_db)):
+    """
+    Get earthquake count grouped by year
+    Returns: [{"year": "2024", "count": 150}, ...]
+    """
+    return EarthquakeService.get_earthquakes_by_year(db)
+
+@router.get("/statistics/by-month")
+def get_statistics_by_month(
+    db: Session = Depends(get_db),
+    year: Optional[int] = Query(None, description="Filter by specific year")
+):
+    """
+    Get earthquake count grouped by month
+    Optional year parameter to filter by specific year
+    Returns: [{"year": "2024", "month": "12", "count": 25}, ...]
+    """
+    return EarthquakeService.get_earthquakes_by_month(db, year)
+
+@router.get("/statistics/magnitude-by-month")
+def get_magnitude_statistics_by_month(
+    db: Session = Depends(get_db),
+    from_year: Optional[int] = Query(None, description="Start year for filtering"),
+    to_year: Optional[int] = Query(None, description="End year for filtering")
+):
+    """
+    Get highest (maximum) magnitude grouped by year and month for chart visualization
+    Returns data suitable for multi-line chart (like the example with 2023, 2024, 2025)
+    Shows the strongest earthquake in each month
+    
+    Example: /earthquakes/statistics/magnitude-by-month?from_year=2023&to_year=2025
+    
+    Returns: [
+        {"year": "2023", "month": "01", "max_magnitude": 4.5, "count": 10},
+        {"year": "2023", "month": "02", "max_magnitude": 4.3, "count": 15},
+        ...
+    ]
+    """
+    return EarthquakeService.get_magnitude_statistics_by_month(db, from_year, to_year)
+
+@router.get("/statistics/count-by-month")
+def get_count_statistics_by_month(
+    db: Session = Depends(get_db),
+    from_year: Optional[int] = Query(None, description="Start year for filtering"),
+    to_year: Optional[int] = Query(None, description="End year for filtering")
+):
+    """
+    Get earthquake count grouped by year and month for chart visualization
+    Returns data suitable for multi-line chart (like the example with 2023, 2024, 2025)
+    Perfect for showing earthquake frequency trends over time
+    
+    Example: /earthquakes/statistics/count-by-month?from_year=2023&to_year=2025
+    
+    Returns: [
+        {"year": "2023", "month": "01", "count": 25},
+        {"year": "2023", "month": "02", "count": 30},
+        {"year": "2024", "month": "01", "count": 28},
+        ...
+    ]
+    """
+    return EarthquakeService.get_count_statistics_by_month(db, from_year, to_year)
 
 @router.post("/sync")
 async def sync_earthquakes(
