@@ -186,6 +186,6 @@ async def sync_earthquakes(
                 "total_processed": len(earthquakes_data)
             }
         else:
-            return {"detail": "No earthquakes found to sync"}
+            return {"detail": "No earthquakes found to sync "}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to sync earthquakes: {str(e)}")
