@@ -33,7 +33,7 @@ ARCGIS_CLIENT_SECRET = "zilzila@6739space"  # Update with actual client_secret i
 
 # Manual token (if token generation fails, use this as fallback)
 # Token expires after some time, need to regenerate from portal
-ARCGIS_MANUAL_TOKEN = "IVxIfrcp1UB6KPqjQhW9NHHezLTqbm233z2Ep3ACPs6Lwn_MjfEL7horw61Z4W8i0eEC55NjxNfg79UCMN26jY_exZj8VNjs0FspxDap_Fa2ANbiY-O9WJo3KULR-JzB6qfeey1aU2lYWoDPDLhmPW7eQiY3NWI7VWIlaDkuYmNFIa9qSLUZGt46o9BeLx6ojgYsqXRhL3iOgIDfBxB8uSEoi6Uk1Jy5PkiQ3IrK3v4Up8tOB8JJ3iCdmYPChw75"
+ARCGIS_MANUAL_TOKEN = "IVxIfrcp1UB6KPqjQhW9NHHezLTqbm233z2Ep3ACPs6Lwn_MjfEL7horw61Z4W8icSSjEst_rqe-ITikk8y6R4eUsFOCEyc8Tj2YjlBGWMe4hRNnaLlhZO_b2LBWNHorVEzQ7ZyM18VebEhVJtgGFcr_jirVvVTqcBIxrpz6ciLicX197FUU5Co1lYWHlkxoVvKORA3ARqZX5nxyLRqLCIYEhJWoK2w3LhRnlzqGbyZLdY2sktrTXoXeudIeEb0"
 
 # Global lock to prevent concurrent sync operations
 _sync_lock = asyncio.Lock()
