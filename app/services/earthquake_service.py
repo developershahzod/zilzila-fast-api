@@ -111,6 +111,14 @@ class EarthquakeService:
         return earthquakes, total
 
     @staticmethod
+    def get_all_earthquakes_simple(db: Session):
+        """
+        Get all earthquakes without any filters or pagination
+        Returns: List of all earthquakes
+        """
+        return db.query(Earthquake).all()
+
+    @staticmethod
     def get_earthquake(db: Session, earthquake_id: int):
         return db.query(Earthquake).filter(Earthquake.id == earthquake_id).first()
 
@@ -157,43 +165,106 @@ class EarthquakeService:
         skipped = 0
         
         for data in earthquakes_data:
-            # Get the external API's earthquake ID
-            external_id = data.get("id")
-            
-            # Check if earthquake already exists by external ID
-            if external_id:
-                existing = db.query(Earthquake).filter(Earthquake.earthquake_id == external_id).first()
-                if existing:
-                    skipped += 1
-                    continue
-            
-            # Convert keys to snake_case if they are in camelCase
-            if "createdBy" in data:
-                data["created_by"] = data.pop("createdBy")
-            if "updatedBy" in data:
-                data["updated_by"] = data.pop("updatedBy")
-            
-            # Store the external ID in earthquake_id field
-            if "id" in data:
-                data["earthquake_id"] = data.pop("id")
-            
-            # Remove created_at and updated_at from data if they exist
-            data.pop("created_at", None)
-            data.pop("updated_at", None)
+            try:
+                # Make a copy to avoid modifying original data
+                earthquake_data = data.copy()
                 
-            # Create earthquake object
-            earthquake = Earthquake(
-                **data,
-                created_at=now,
-                updated_at=now
-            )
-            earthquakes.append(earthquake)
+                # Get the external API's earthquake ID and convert to integer
+                external_id = earthquake_data.get("id")
+                integer_id = None
+                
+                # Try to convert to integer
+                if external_id:
+                    try:
+                        integer_id = int(external_id)
+                    except (ValueError, TypeError):
+                        # Skip non-integer IDs (like "gfz2025xybv")
+                        pass
+                
+                # Check if earthquake already exists
+                # Method 1: Check by earthquake_id (if it's an integer)
+                if integer_id:
+                    existing = db.query(Earthquake).filter(Earthquake.earthquake_id == integer_id).first()
+                    if existing:
+                        skipped += 1
+                        continue
+                
+                # Method 2: Check by date, time, latitude, longitude (for records without earthquake_id)
+                # This prevents duplicates for records with non-integer IDs
+                date_val = earthquake_data.get("date")
+                time_val = earthquake_data.get("time")
+                lat_val = earthquake_data.get("latitude")
+                lon_val = earthquake_data.get("longitude")
+                
+                if date_val and time_val and lat_val and lon_val:
+                    existing_by_location = db.query(Earthquake).filter(
+                        Earthquake.date == date_val,
+                        Earthquake.time == time_val,
+                        Earthquake.latitude == lat_val,
+                        Earthquake.longitude == lon_val
+                    ).first()
+                    if existing_by_location:
+                        skipped += 1
+                        continue
+                
+                # Remove the original id field
+                earthquake_data.pop("id", None)
+                
+                # Convert keys to snake_case if they are in camelCase
+                if "createdBy" in earthquake_data:
+                    created_by_value = earthquake_data.pop("createdBy")
+                    # Convert to integer if possible, otherwise None
+                    try:
+                        earthquake_data["created_by"] = int(created_by_value) if created_by_value else None
+                    except (ValueError, TypeError):
+                        earthquake_data["created_by"] = None
+                        
+                if "updatedBy" in earthquake_data:
+                    updated_by_value = earthquake_data.pop("updatedBy")
+                    # Convert to integer if possible, otherwise None
+                    try:
+                        earthquake_data["updated_by"] = int(updated_by_value) if updated_by_value else None
+                    except (ValueError, TypeError):
+                        earthquake_data["updated_by"] = None
+                
+                # Remove created_at and updated_at from data if they exist
+                earthquake_data.pop("created_at", None)
+                earthquake_data.pop("updated_at", None)
+                
+                # Set the earthquake_id to integer version or None
+                earthquake_data["earthquake_id"] = integer_id
+                    
+                # Create earthquake object
+                earthquake = Earthquake(
+                    **earthquake_data,
+                    created_at=now,
+                    updated_at=now
+                )
+                earthquakes.append(earthquake)
+                
+            except Exception as e:
+                # Skip problematic records and continue
+                print(f"Skipping earthquake due to error: {e}")
+                skipped += 1
+                continue
         
-        if earthquakes:
-            db.add_all(earthquakes)
+        # Insert earthquakes one by one to handle errors individually
+        inserted = []
+        for earthquake in earthquakes:
+            try:
+                db.add(earthquake)
+                db.flush()  # Flush to catch errors immediately
+                inserted.append(earthquake)
+            except Exception as e:
+                db.rollback()
+                print(f"Failed to insert earthquake: {e}")
+                skipped += 1
+        
+        # Commit all successful inserts
+        if inserted:
             db.commit()
         
-        return earthquakes, skipped
+        return inserted, skipped
 
     @staticmethod
     def get_earthquakes_by_year(db: Session):
@@ -310,3 +381,68 @@ class EarthquakeService:
             "month": row.month, 
             "count": row.count
         } for row in results]
+
+    @staticmethod
+    def get_all_coordinates(db: Session):
+        """
+        Get all earthquake coordinates with metadata for shapefile/GIS export
+        Returns: List of all earthquakes with coordinates and key attributes
+        """
+        earthquakes = db.query(Earthquake).all()
+        
+        return [{
+            "id": eq.id,
+            "latitude": float(eq.latitude) if eq.latitude else None,
+            "longitude": float(eq.longitude) if eq.longitude else None,
+            "magnitude": float(eq.magnitude) if eq.magnitude else None,
+            "depth": float(eq.depth) if eq.depth else None,
+            "date": eq.date,
+            "time": eq.time,
+            "epicenter": eq.epicenter,
+            "earthquake_id": eq.earthquake_id
+        } for eq in earthquakes]
+
+    @staticmethod
+    def get_geojson_coordinates(db: Session):
+        """
+        Get all earthquake coordinates in GeoJSON format for shapefile export
+        GeoJSON can be easily converted to shapefile using QGIS, ArcGIS, or ogr2ogr
+        """
+        earthquakes = db.query(Earthquake).all()
+        
+        features = []
+        for eq in earthquakes:
+            # Skip if no coordinates
+            if not eq.latitude or not eq.longitude:
+                continue
+                
+            feature = {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [
+                        float(eq.longitude),  # longitude first in GeoJSON
+                        float(eq.latitude)    # latitude second
+                    ]
+                },
+                "properties": {
+                    "id": eq.id,
+                    "earthquake_id": eq.earthquake_id,
+                    "date": eq.date,
+                    "time": eq.time,
+                    "magnitude": float(eq.magnitude) if eq.magnitude else None,
+                    "depth": float(eq.depth) if eq.depth else None,
+                    "epicenter": eq.epicenter,
+                    "epicenter_ru": eq.epicenter_ru,
+                    "epicenter_en": eq.epicenter_en,
+                    "magnitude_type": eq.magnitude_type,
+                    "color": eq.color,
+                    "is_perceptabily": eq.is_perceptabily
+                }
+            }
+            features.append(feature)
+        
+        return {
+            "type": "FeatureCollection",
+            "features": features
+        }
