@@ -7,8 +7,9 @@ import asyncio
 import logging
 import requests
 import urllib3
+import time
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from app.db.database import SessionLocal
@@ -51,35 +52,41 @@ def get_arcgis_token() -> str:
     Get authentication token from ArcGIS - Following official documentation
     """
     
-    # Method 1: Standard ArcGIS Server Token Generation (from documentation)
-    # POST /arcgis/tokens/generateToken
-    logger.info("🔑 Attempting ArcGIS Server token authentication...")
+    # Method 1: Standard ArcGIS Portal Token Generation
+    # POST /uzspace/sharing/rest/generateToken (verified working endpoint)
+    logger.info("🔑 Attempting ArcGIS Portal token authentication...")
     
     token_urls = [
-        "https://gis.uzspace.uz/arcgis/tokens/generateToken",
-        "https://gis.uzspace.uz/uzspacesrvr/tokens/generateToken",
-        "https://gis.uzspace.uz/server/tokens/generateToken",
+        "https://gis.uzspace.uz/uzspace/sharing/rest/generateToken",
     ]
     
-    # According to docs: username, password, client, referer (if client=referer), expiration, f
+    # According to docs: username, password, client, referer, expiration, f
     token_params = {
         "username": ARCGIS_USERNAME,
         "password": ARCGIS_PASSWORD,
-        "client": "requestip",  # or "referer" or "ip"
-        "expiration": 60,  # 60 minutes
+        "client": "referer",
+        "referer": "https://api-zilzila.spacemc.uz/",
+        "expiration": 20160,  # 14 days in minutes
         "f": "json"
     }
     
     for url in token_urls:
         try:
             logger.info(f"🔑 Trying: {url}")
-            logger.info(f"📝 Parameters: username={ARCGIS_USERNAME}, client=requestip, expiration=60")
+            logger.info(f"📝 Parameters: username={ARCGIS_USERNAME}, client=referer, referer=https://api-zilzila.spacemc.uz/, expiration=20160")
             
-            # Must use POST with application/x-www-form-urlencoded
+            # Must use POST with application/x-www-form-urlencoded and browser-like headers
+            headers = {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                "Accept-Language": "ru-RU,ru;q=0.9,en-GB;q=0.8,en;q=0.7,en-US;q=0.6",
+                "Cache-Control": "no-cache",
+                "Pragma": "no-cache",
+            }
             response = requests.post(
                 url, 
                 data=token_params,
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                headers=headers,
                 timeout=10, 
                 verify=False
             )
@@ -96,7 +103,11 @@ def get_arcgis_token() -> str:
                     logger.info(f"✅ Token (first 30 chars): {result['token'][:30]}...")
                     return result["token"]
                 elif "error" in result:
-                    logger.error(f"❌ Token error: {result['error']}")
+                    error = result['error']
+                    logger.error(f"❌ Token error from {url}:")
+                    logger.error(f"   Code: {error.get('code')}")
+                    logger.error(f"   Message: {error.get('message')}")
+                    logger.error(f"   Details: {error.get('details')}")
             else:
                 logger.warning(f"⚠️ HTTP {response.status_code}: {response.text[:200]}")
                 
@@ -282,13 +293,21 @@ def is_duplicate(earthquake: Earthquake, existing_features: List[Dict]) -> bool:
     return False
 
 
-def send_features_to_arcgis(features: List[Dict], token: str) -> bool:
+def send_features_to_arcgis(features: List[Dict], token: str, max_retries: int = 3) -> Tuple[bool, int]:
     """
-    Send features to ArcGIS Feature Server
+    Send features to ArcGIS Feature Server with retry logic
+    
+    Args:
+        features: List of features to send
+        token: ArcGIS authentication token
+        max_retries: Maximum number of retry attempts (default: 3)
+    
+    Returns:
+        Tuple of (success: bool, features_sent: int)
     """
     if not features:
         logger.info("No features to send")
-        return True
+        return True, 0
     
     add_url = f"{ARCGIS_BASE_URL}/{ARCGIS_LAYER_ID}/addFeatures"
     
@@ -300,47 +319,105 @@ def send_features_to_arcgis(features: List[Dict], token: str) -> bool:
         "token": token
     }
     
-    try:
-        logger.info(f"📤 Sending {len(features)} features to ArcGIS...")
-        logger.info(f"🌐 URL: {add_url}")
-        logger.info(f"📝 Sample feature: {json.dumps(features[0], indent=2)[:300]}...")
-        
-        response = requests.post(add_url, data=data, timeout=60, verify=False)
-        
-        logger.info(f"📡 Response status: {response.status_code}")
-        
-        if response.status_code == 200:
-            result = response.json()
-            logger.info(f"📄 Response body: {json.dumps(result, indent=2)[:500]}...")
+    retry_count = 0
+    last_error = None
+    
+    while retry_count <= max_retries:
+        try:
+            if retry_count > 0:
+                # Exponential backoff: 2, 4, 8 seconds
+                wait_time = 2 ** retry_count
+                logger.info(f"🔄 Retry attempt {retry_count}/{max_retries} after {wait_time}s...")
+                time.sleep(wait_time)
             
-            if "addResults" in result:
-                success_count = sum(1 for r in result["addResults"] if r.get("success"))
-                failed_count = len(features) - success_count
+            logger.info(f"📤 Sending {len(features)} features to ArcGIS... (attempt {retry_count + 1}/{max_retries + 1})")
+            if retry_count == 0:
+                logger.info(f"🌐 URL: {add_url}")
+                logger.info(f"📝 Sample feature: {json.dumps(features[0], indent=2)[:300]}...")
+            
+            response = requests.post(add_url, data=data, timeout=60, verify=False)
+            
+            logger.info(f"📡 Response status: {response.status_code}")
+            
+            if response.status_code == 200:
+                result = response.json()
+                logger.info(f"📄 Response body: {json.dumps(result, indent=2)[:500]}...")
                 
-                # Log failed features details
-                if failed_count > 0:
-                    failed_results = [r for r in result["addResults"] if not r.get("success")]
-                    logger.error(f"❌ Failed features details: {json.dumps(failed_results[:3], indent=2)}")
-                    logger.warning(f"⚠️ Sent {success_count}/{len(features)} features ({failed_count} failed)")
+                if "addResults" in result:
+                    success_count = sum(1 for r in result["addResults"] if r.get("success"))
+                    failed_count = len(features) - success_count
+                    
+                    # Log failed features details
+                    if failed_count > 0:
+                        failed_results = [r for r in result["addResults"] if not r.get("success")]
+                        logger.error(f"❌ Failed features details: {json.dumps(failed_results[:3], indent=2)}")
+                        logger.warning(f"⚠️ Sent {success_count}/{len(features)} features ({failed_count} failed)")
+                        
+                        # If some succeeded, consider it a partial success
+                        if success_count > 0:
+                            return True, success_count
+                        else:
+                            # All failed, retry
+                            last_error = f"All {failed_count} features failed"
+                            retry_count += 1
+                            continue
+                    else:
+                        logger.info(f"✅ Successfully sent {success_count}/{len(features)} features to ArcGIS")
+                        return True, success_count
+                        
+                elif "error" in result:
+                    error_info = result['error']
+                    last_error = f"Code {error_info.get('code')}: {error_info.get('message')}"
+                    logger.error(f"❌ Add features error: {json.dumps(error_info, indent=2)}")
+                    
+                    # Check if it's a token error (should regenerate token)
+                    if error_info.get('code') in [498, 499]:  # Invalid/expired token
+                        logger.error("❌ Token error - will regenerate on next sync")
+                        return False, 0
+                    
+                    retry_count += 1
+                    continue
                 else:
-                    logger.info(f"✅ Successfully sent {success_count}/{len(features)} features to ArcGIS")
-                return success_count > 0
-            elif "error" in result:
-                logger.error(f"❌ Add features error: {json.dumps(result['error'], indent=2)}")
-                return False
+                    last_error = "Unexpected response format"
+                    logger.error(f"❌ Unexpected response: {json.dumps(result, indent=2)[:500]}")
+                    retry_count += 1
+                    continue
+                    
+            elif response.status_code in [500, 502, 503, 504]:  # Server errors - retry
+                last_error = f"HTTP {response.status_code}"
+                logger.error(f"❌ Server error {response.status_code} - will retry")
+                logger.error(f"❌ Response text: {response.text[:500]}")
+                retry_count += 1
+                continue
             else:
-                logger.error(f"❌ Unexpected response: {json.dumps(result, indent=2)[:500]}")
-                return False
-        else:
-            logger.error(f"❌ HTTP {response.status_code}")
-            logger.error(f"❌ Response text: {response.text[:500]}")
-            return False
+                last_error = f"HTTP {response.status_code}"
+                logger.error(f"❌ HTTP {response.status_code}")
+                logger.error(f"❌ Response text: {response.text[:500]}")
+                return False, 0
+                
+        except requests.exceptions.Timeout:
+            last_error = "Request timeout"
+            logger.error(f"❌ Request timeout - will retry")
+            retry_count += 1
+            continue
             
-    except Exception as e:
-        logger.error(f"❌ Error sending features to ArcGIS: {e}")
-        import traceback
-        logger.error(f"❌ Traceback: {traceback.format_exc()}")
-        return False
+        except requests.exceptions.ConnectionError as e:
+            last_error = f"Connection error: {str(e)}"
+            logger.error(f"❌ Connection error - will retry: {e}")
+            retry_count += 1
+            continue
+            
+        except Exception as e:
+            last_error = str(e)
+            logger.error(f"❌ Error sending features to ArcGIS: {e}")
+            import traceback
+            logger.error(f"❌ Traceback: {traceback.format_exc()}")
+            retry_count += 1
+            continue
+    
+    # All retries exhausted
+    logger.error(f"❌ Failed to send batch after {max_retries + 1} attempts. Last error: {last_error}")
+    return False, 0
 
 
 async def sync_to_arcgis_task():
@@ -398,18 +475,25 @@ async def sync_to_arcgis_task():
                 _sync_stats["last_error"] = None
                 return
             
-            # Send features to ArcGIS in batches of 100
+            # Send features to ArcGIS in batches of 100 with retry
             batch_size = 100
             total_sent = 0
             failed_batches = 0
             
             for i in range(0, len(new_features), batch_size):
                 batch = new_features[i:i + batch_size]
-                if send_features_to_arcgis(batch, token):
-                    total_sent += len(batch)
-                    logger.info(f"✅ Sent batch {i//batch_size + 1}/{(len(new_features)-1)//batch_size + 1} ({len(batch)} features)")
+                batch_num = i//batch_size + 1
+                total_batches = (len(new_features)-1)//batch_size + 1
+                
+                logger.info(f"📦 Processing batch {batch_num}/{total_batches} ({len(batch)} features)")
+                
+                success, sent_count = send_features_to_arcgis(batch, token, max_retries=3)
+                
+                if success:
+                    total_sent += sent_count
+                    logger.info(f"✅ Batch {batch_num}/{total_batches} completed: {sent_count} features sent")
                 else:
-                    logger.error(f"❌ Failed to send batch {i//batch_size + 1}")
+                    logger.error(f"❌ Batch {batch_num}/{total_batches} failed after all retries")
                     failed_batches += 1
             
             end_time = datetime.now()
@@ -474,3 +558,12 @@ def get_arcgis_sync_status():
         "last_sync_time": _last_sync_time.isoformat() if _last_sync_time else None,
         "stats": _sync_stats
     }
+
+
+def reset_arcgis_error_stats():
+    """
+    Reset ArcGIS error statistics
+    """
+    global _sync_stats
+    _sync_stats["last_error"] = None
+    logger.info("🔄 ArcGIS error stats reset")

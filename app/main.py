@@ -4,9 +4,10 @@ from app.api.api import api_router
 from app.db.database import engine
 from app.models import earthquake
 from app.scheduler import start_scheduler, get_sync_status
-from app.arcgis_sync_scheduler import start_arcgis_scheduler, get_arcgis_sync_status
+from app.arcgis_sync_scheduler import start_arcgis_scheduler, get_arcgis_sync_status, sync_to_arcgis_task, reset_arcgis_error_stats, get_arcgis_token
 import time
 import logging
+from datetime import datetime
 from sqlalchemy import exc
 
 # Setup logging
@@ -66,8 +67,13 @@ def read_root():
         "docs": "/docs",
         "redoc": "/redoc",
         "external_api_sync": "ENABLED - Syncs from api.smrm.uz every 10 minutes",
-        "arcgis_sync": "ENABLED - Syncs to ArcGIS every 10 minutes (needs valid credentials)",
-        "manual_sync": "Available at: POST /api/earthquakes/sync"
+        "arcgis_sync": "ENABLED - Syncs to ArcGIS every 10 minutes with auto-retry",
+        "api_endpoints": {
+            "check_token": "GET /arcgis-token-check - Test ArcGIS token generation",
+            "start_sync": "POST /arcgis-sync-start - Manually start ArcGIS sync",
+            "sync_status": "GET /arcgis-sync-status - Check ArcGIS sync status",
+            "manual_sync": "POST /api/earthquakes/sync - Sync from external API"
+        }
     }
 
 @app.get("/health")
@@ -158,3 +164,98 @@ def arcgis_sync_status_endpoint():
             "batch_size": 100
         }
     }
+
+@app.get("/arcgis-token-check")
+def check_arcgis_token():
+    """
+    Check ArcGIS token generation
+    Tests if token can be generated with current credentials and endpoint
+    Returns token info without exposing the full token
+    """
+    try:
+        logger.info("🔑 Testing ArcGIS token generation...")
+        
+        token = get_arcgis_token()
+        
+        if token:
+            return {
+                "status": "success",
+                "message": "Token generated successfully",
+                "token_info": {
+                    "length": len(token),
+                    "preview": f"{token[:30]}..." if len(token) > 30 else token,
+                    "endpoint": "https://gis.uzspace.uz/uzspace/sharing/rest/generateToken",
+                    "client_type": "referer",
+                    "expiration": "20160 minutes (14 days)"
+                },
+                "timestamp": datetime.now().isoformat()
+            }
+        else:
+            return {
+                "status": "error",
+                "message": "Failed to generate token",
+                "details": "Check application logs for detailed error information",
+                "timestamp": datetime.now().isoformat()
+            }
+    except Exception as e:
+        logger.error(f"❌ Token check failed: {e}")
+        return {
+            "status": "error",
+            "message": f"Token check failed: {str(e)}",
+            "timestamp": datetime.now().isoformat()
+        }
+
+@app.post("/arcgis-sync-start")
+async def start_arcgis_sync():
+    """
+    Start ArcGIS sync manually
+    This will sync all earthquakes from database to ArcGIS Feature Server
+    Includes automatic retry logic for failed batches
+    """
+    status = get_arcgis_sync_status()
+    if status["is_syncing"]:
+        return {
+            "status": "error",
+            "message": "ArcGIS sync is already in progress",
+            "is_syncing": True,
+            "last_sync_time": status["last_sync_time"]
+        }
+    
+    try:
+        logger.info("🚀 Starting ArcGIS sync via API...")
+        
+        # Reset error stats before starting new sync
+        reset_arcgis_error_stats()
+        
+        # Trigger sync with new token
+        await sync_to_arcgis_task()
+        
+        # Get updated status
+        updated_status = get_arcgis_sync_status()
+        
+        return {
+            "status": "success",
+            "message": "ArcGIS sync completed",
+            "statistics": updated_status["stats"],
+            "last_sync_time": updated_status["last_sync_time"],
+            "features": {
+                "retry_enabled": True,
+                "max_retries": 3,
+                "batch_size": 100
+            }
+        }
+    except Exception as e:
+        logger.error(f"❌ ArcGIS sync failed: {e}")
+        return {
+            "status": "error",
+            "message": f"ArcGIS sync failed: {str(e)}"
+        }
+
+@app.post("/arcgis-sync-manual")
+async def manual_arcgis_sync():
+    """
+    Manually trigger ArcGIS sync with new token (Legacy endpoint - use /arcgis-sync-start instead)
+    This will sync all earthquakes from database to ArcGIS Feature Server
+    Uses the updated token configuration with correct endpoint and credentials
+    """
+    return await start_arcgis_sync()
