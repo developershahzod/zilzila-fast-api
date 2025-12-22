@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 from typing import Optional
 from datetime import datetime
 
@@ -20,6 +20,22 @@ class EarthquakeBase(BaseModel):
     epicenter_en: Optional[str] = None
     created_by: Optional[int] = None
     updated_by: Optional[int] = None
+
+    @validator("date", pre=True)
+    def format_date(cls, v):
+        if v is None:
+            return v
+        if isinstance(v, datetime):
+            return v.strftime("%Y.%m.%d")
+        s = str(v).strip()
+        if not s:
+            return s
+        for fmt in ("%Y-%m-%d", "%Y.%m.%d", "%Y/%m/%d", "%d.%m.%Y", "%d-%m-%Y"):
+            try:
+                return datetime.strptime(s, fmt).strftime("%Y.%m.%d")
+            except ValueError:
+                continue
+        return s
 
 class EarthquakeCreate(EarthquakeBase):
     pass

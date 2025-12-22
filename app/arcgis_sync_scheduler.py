@@ -40,6 +40,7 @@ ARCGIS_MANUAL_TOKEN = "IVxIfrcp1UB6KPqjQhW9NHHezLTqbm233z2Ep3ACPs6Lwn_MjfEL7horw
 _sync_lock = asyncio.Lock()
 _is_syncing = False
 _last_sync_time = None
+_scheduler_task: asyncio.Task | None = None
 _sync_stats = {
     "total_sent": 0,
     "total_skipped": 0,
@@ -531,22 +532,48 @@ async def run_arcgis_scheduler():
     # Run first sync after 30 seconds (give app time to fully start)
     await asyncio.sleep(30)
     
-    while True:
-        try:
-            await sync_to_arcgis_task()
-        except Exception as e:
-            logger.error(f"Error in ArcGIS scheduler: {e}")
-        
-        # Wait 10 minutes (600 seconds)
-        logger.info("⏰ Next ArcGIS sync in 10 minutes...")
-        await asyncio.sleep(600)
+    try:
+        while True:
+            try:
+                await sync_to_arcgis_task()
+            except Exception as e:
+                logger.error(f"Error in ArcGIS scheduler: {e}")
+
+            # Wait 10 minutes (600 seconds)
+            logger.info("⏰ Next ArcGIS sync in 10 minutes...")
+            await asyncio.sleep(600)
+    except asyncio.CancelledError:
+        logger.info("🛑 ArcGIS sync scheduler stopped")
+        raise
 
 
 def start_arcgis_scheduler():
     """
     Start the ArcGIS background scheduler
     """
-    asyncio.create_task(run_arcgis_scheduler())
+    global _scheduler_task
+    if _scheduler_task and not _scheduler_task.done():
+        logger.info("ArcGIS sync scheduler already running")
+        return
+    _scheduler_task = asyncio.create_task(run_arcgis_scheduler())
+
+
+async def stop_arcgis_scheduler():
+    global _scheduler_task
+    if not _scheduler_task or _scheduler_task.done():
+        _scheduler_task = None
+        return
+    _scheduler_task.cancel()
+    try:
+        await _scheduler_task
+    except asyncio.CancelledError:
+        pass
+    finally:
+        _scheduler_task = None
+
+
+def is_arcgis_scheduler_enabled() -> bool:
+    return _scheduler_task is not None and not _scheduler_task.done()
 
 
 def get_arcgis_sync_status():
@@ -554,6 +581,7 @@ def get_arcgis_sync_status():
     Get current ArcGIS sync status
     """
     return {
+        "enabled": is_arcgis_scheduler_enabled(),
         "is_syncing": _is_syncing,
         "last_sync_time": _last_sync_time.isoformat() if _last_sync_time else None,
         "stats": _sync_stats

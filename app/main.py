@@ -3,12 +3,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.api import api_router
 from app.db.database import engine
 from app.models import earthquake
-from app.scheduler import start_scheduler, get_sync_status
-from app.arcgis_sync_scheduler import start_arcgis_scheduler, get_arcgis_sync_status, sync_to_arcgis_task, reset_arcgis_error_stats, get_arcgis_token
+from app.scheduler import start_scheduler, stop_scheduler, get_sync_status
+from app.arcgis_sync_scheduler import (
+    start_arcgis_scheduler,
+    stop_arcgis_scheduler,
+    get_arcgis_sync_status,
+    sync_to_arcgis_task,
+    reset_arcgis_error_stats,
+    get_arcgis_token,
+)
 import time
 import logging
 from datetime import datetime
 from sqlalchemy import exc
+
+import os
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -50,15 +59,28 @@ app.add_middleware(
 # Include API router
 app.include_router(api_router, prefix="/api")
 
+EXTERNAL_API_SCHEDULER_ENABLED = os.getenv("EXTERNAL_API_SCHEDULER_ENABLED", "false").strip().lower() in {"1", "true", "yes", "y", "on"}
+ARCGIS_SCHEDULER_ENABLED = os.getenv("ARCGIS_SCHEDULER_ENABLED", "false").strip().lower() in {"1", "true", "yes", "y", "on"}
+
 @app.on_event("startup")
 async def startup_event():
     """
     Start background tasks on application startup
     """
     logger.info("Starting application...")
-    start_scheduler()  # External API → Database sync (every 10 minutes)
-    start_arcgis_scheduler()  # Database → ArcGIS sync (every 10 minutes)
-    logger.info("Application started - BOTH schedulers ENABLED (every 10 minutes)")
+    if EXTERNAL_API_SCHEDULER_ENABLED:
+        start_scheduler()  # External API → Database sync (every 10 minutes)
+        logger.info("External API scheduler ENABLED")
+    else:
+        logger.info("External API scheduler DISABLED")
+
+    if ARCGIS_SCHEDULER_ENABLED:
+        start_arcgis_scheduler()  # Database → ArcGIS sync (every 10 minutes)
+        logger.info("ArcGIS scheduler ENABLED")
+    else:
+        logger.info("ArcGIS scheduler DISABLED")
+
+    logger.info("Application started")
 
 @app.get("/")
 def read_root():
@@ -66,8 +88,8 @@ def read_root():
         "message": "Welcome to SMRM Earthquake API",
         "docs": "/docs",
         "redoc": "/redoc",
-        "external_api_sync": "ENABLED - Syncs from api.smrm.uz every 10 minutes",
-        "arcgis_sync": "ENABLED - Syncs to ArcGIS every 10 minutes with auto-retry",
+        "external_api_sync": "ENABLED - Syncs from api.smrm.uz every 10 minutes" if EXTERNAL_API_SCHEDULER_ENABLED else "DISABLED",
+        "arcgis_sync": "ENABLED - Syncs to ArcGIS every 10 minutes with auto-retry" if ARCGIS_SCHEDULER_ENABLED else "DISABLED",
         "api_endpoints": {
             "check_token": "GET /arcgis-token-check - Test ArcGIS token generation",
             "start_sync": "POST /arcgis-sync-start - Manually start ArcGIS sync",
@@ -86,7 +108,7 @@ def health_check():
     return {
         "status": "healthy",
         "external_api_sync": {
-            "enabled": True,
+            "enabled": sync_status.get("enabled", False),
             "interval": "10 minutes",
             "source": "api.smrm.uz",
             "destination": "PostgreSQL Database",
@@ -94,7 +116,7 @@ def health_check():
             "last_sync_time": sync_status["last_sync_time"]
         },
         "arcgis_sync": {
-            "enabled": True,
+            "enabled": arcgis_status.get("enabled", False),
             "interval": "10 minutes",
             "source": "PostgreSQL Database",
             "destination": "ArcGIS Feature Server",
@@ -113,16 +135,16 @@ def sync_status():
     arcgis_status = get_arcgis_sync_status()
     return {
         "internal_scheduler": {
-            "enabled": False,
-            "interval_seconds": 0,
-            "interval_minutes": 0,
-            "status": "DISABLED"
+            "enabled": status.get("enabled", False),
+            "interval_seconds": 600 if status.get("enabled", False) else 0,
+            "interval_minutes": 10 if status.get("enabled", False) else 0,
+            "status": "ACTIVE" if status.get("enabled", False) else "DISABLED"
         },
         "arcgis_scheduler": {
-            "enabled": True,
-            "interval_seconds": 600,
-            "interval_minutes": 10,
-            "status": "ACTIVE",
+            "enabled": arcgis_status.get("enabled", False),
+            "interval_seconds": 600 if arcgis_status.get("enabled", False) else 0,
+            "interval_minutes": 10 if arcgis_status.get("enabled", False) else 0,
+            "status": "ACTIVE" if arcgis_status.get("enabled", False) else "DISABLED",
             "target": "https://gis.uzspace.uz/uzspacesrvr/rest/services/Hosted/ZilzilaNuqtalari/FeatureServer"
         },
         "current_sync": {
@@ -148,8 +170,8 @@ def arcgis_sync_status_endpoint():
     status = get_arcgis_sync_status()
     return {
         "scheduler": {
-            "enabled": True,
-            "interval": "10 minutes",
+            "enabled": status.get("enabled", False),
+            "interval": "10 minutes" if status.get("enabled", False) else "disabled",
             "target": "https://gis.uzspace.uz/uzspacesrvr/rest/services/Hosted/ZilzilaNuqtalari/FeatureServer"
         },
         "current_status": {
@@ -163,6 +185,38 @@ def arcgis_sync_status_endpoint():
             "check_by_location": True,
             "batch_size": 100
         }
+    }
+
+
+@app.post("/scheduler/external/enable")
+async def enable_external_scheduler():
+    start_scheduler()
+    return {"status": "success", "external_scheduler": get_sync_status()}
+
+
+@app.post("/scheduler/external/disable")
+async def disable_external_scheduler():
+    await stop_scheduler()
+    return {"status": "success", "external_scheduler": get_sync_status()}
+
+
+@app.post("/scheduler/arcgis/enable")
+async def enable_arcgis_scheduler():
+    start_arcgis_scheduler()
+    return {"status": "success", "arcgis_scheduler": get_arcgis_sync_status()}
+
+
+@app.post("/scheduler/arcgis/disable")
+async def disable_arcgis_scheduler():
+    await stop_arcgis_scheduler()
+    return {"status": "success", "arcgis_scheduler": get_arcgis_sync_status()}
+
+
+@app.get("/scheduler/status")
+def scheduler_status():
+    return {
+        "external_scheduler": get_sync_status(),
+        "arcgis_scheduler": get_arcgis_sync_status(),
     }
 
 @app.get("/arcgis-token-check")

@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 _sync_lock = asyncio.Lock()
 _is_syncing = False
 _last_sync_time = None
+_scheduler_task: asyncio.Task | None = None
 
 
 async def sync_earthquakes_task():
@@ -87,23 +88,49 @@ async def run_scheduler():
     # Run first sync after 30 seconds (give app time to fully start)
     await asyncio.sleep(30)
     
-    while True:
-        try:
-            await sync_earthquakes_task()
-        except Exception as e:
-            logger.error(f"Error in scheduler: {e}")
-        
-        # Wait 10 minutes (600 seconds)
-        logger.info("⏰ Next external API sync in 10 minutes...")
-        await asyncio.sleep(600)
+    try:
+        while True:
+            try:
+                await sync_earthquakes_task()
+            except Exception as e:
+                logger.error(f"Error in scheduler: {e}")
+
+            # Wait 10 minutes (600 seconds)
+            logger.info("⏰ Next external API sync in 10 minutes...")
+            await asyncio.sleep(600)
+    except asyncio.CancelledError:
+        logger.info("🛑 External API sync scheduler stopped")
+        raise
 
 
 def start_scheduler():
     """
     Start the background scheduler for External API → Database sync
     """
-    asyncio.create_task(run_scheduler())
+    global _scheduler_task
+    if _scheduler_task and not _scheduler_task.done():
+        logger.info("External API sync scheduler already running")
+        return
+    _scheduler_task = asyncio.create_task(run_scheduler())
     logger.info("✅ External API sync scheduler ENABLED")
+
+
+async def stop_scheduler():
+    global _scheduler_task
+    if not _scheduler_task or _scheduler_task.done():
+        _scheduler_task = None
+        return
+    _scheduler_task.cancel()
+    try:
+        await _scheduler_task
+    except asyncio.CancelledError:
+        pass
+    finally:
+        _scheduler_task = None
+
+
+def is_scheduler_enabled() -> bool:
+    return _scheduler_task is not None and not _scheduler_task.done()
 
 
 def get_sync_status():
@@ -111,6 +138,7 @@ def get_sync_status():
     Get current sync status
     """
     return {
+        "enabled": is_scheduler_enabled(),
         "is_syncing": _is_syncing,
         "last_sync_time": _last_sync_time.isoformat() if _last_sync_time else None
     }
